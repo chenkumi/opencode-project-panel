@@ -1,0 +1,47 @@
+# opencode-project-panel
+
+OpenCode TUI plugin that adds a bottom bar with:
+
+- a project file manager with Markdown/code preview and editing;
+- a Permissions panel for Skills, Tools, and MCP configuration.
+
+## Install
+
+Add the package to your OpenCode configuration:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-project-panel"]
+}
+```
+
+OpenCode installs npm plugins automatically at startup. The plugin uses the
+current project configuration (`opencode.json` or `opencode.jsonc`) when
+editing permissions and MCP settings.
+
+## Shortcuts
+
+- `F1`: open the file manager
+- `F3`: open Permissions
+- `F2`: rename the selected file
+- `F7`: create a file or directory
+- `Delete`: delete the selected file
+- `Ctrl+G`: go to a path
+- `Ctrl+R`: return to the project root
+
+## Development
+
+```sh
+bun install
+bun run typecheck
+bun run build
+```
+
+The package entry point is the generated `dist/index.js` file. Runtime UI
+dependencies remain external in the bundle and are declared in `dependencies`
+so OpenCode's Bun-based plugin loader can resolve them.
+
+## License
+
+MIT

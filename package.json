@@ -1,0 +1,41 @@
+{
+  "name": "opencode-project-panel",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenCode TUI plugin with a file manager and permissions panels",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "file-manager",
+    "permissions",
+    "mcp"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "bun build src/index.tsx --outfile=dist/index.js --external solid-js --external @opentui/core --external @opentui/solid --external @opentui/keymap --external @opencode-ai/plugin --target bun --format esm",
+    "prepublishOnly": "bun run build && bun run typecheck",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentui/keymap": "0.4.3",
+    "jsonc-parser": "^3.3.1",
+    "solid-js": "^1.9.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "latest",
+    "@opentui/core": "0.4.3",
+    "@opentui/solid": "0.4.3",
+    "@types/bun": "latest",
+    "typescript": "^7.0.0"
+  }
+}

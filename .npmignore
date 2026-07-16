@@ -1,0 +1,11 @@
+src/
+.agents/
+.git/
+.github/
+node_modules/
+dist/**/*.map
+tsconfig.json
+bun.lock
+AGENTS.md
+.gitignore
+.npmignore
