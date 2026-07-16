@@ -7,18 +7,21 @@ OpenCode TUI plugin that adds a bottom bar with:
 
 ## Install
 
-Add the package to your OpenCode configuration:
+Add the package to your OpenCode TUI configuration (`tui.json` or
+`tui.jsonc`):
 
-```json
+```jsonc
 {
-  "$schema": "https://opencode.ai/config.json",
+  "$schema": "https://opencode.ai/tui.json",
   "plugin": ["opencode-project-panel"]
 }
 ```
 
-OpenCode installs npm plugins automatically at startup. The plugin uses the
-current project configuration (`opencode.json` or `opencode.jsonc`) when
-editing permissions and MCP settings.
+OpenCode installs npm TUI plugins automatically at startup. Do not add this
+package to the server plugin list in `opencode.json`; this package is a TUI
+plugin and exposes the `./tui` entrypoint. The plugin uses the current project
+configuration (`opencode.json` or `opencode.jsonc`) when editing permissions
+and MCP settings.
 
 ## Shortcuts
 

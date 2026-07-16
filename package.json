@@ -1,11 +1,19 @@
 {
   "name": "opencode-project-panel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "OpenCode TUI plugin with a file manager and permissions panels",
-  "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chenkumi/opencode-project-panel.git"
+  },
+  "homepage": "https://github.com/chenkumi/opencode-project-panel#readme",
+  "bugs": {
+    "url": "https://github.com/chenkumi/opencode-project-panel/issues"
+  },
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./tui": "./dist/index.js"
   },
   "files": [
     "dist",
@@ -21,20 +29,23 @@
     "mcp"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "bun build src/index.tsx --outfile=dist/index.js --external solid-js --external @opentui/core --external @opentui/solid --external @opentui/keymap --external @opencode-ai/plugin --target bun --format esm",
     "prepublishOnly": "bun run build && bun run typecheck",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@opentui/core": "0.4.3",
     "@opentui/keymap": "0.4.3",
+    "@opentui/solid": "0.4.3",
     "jsonc-parser": "^3.3.1",
     "solid-js": "^1.9.0"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "latest",
-    "@opentui/core": "0.4.3",
-    "@opentui/solid": "0.4.3",
     "@types/bun": "latest",
     "typescript": "^7.0.0"
   }
