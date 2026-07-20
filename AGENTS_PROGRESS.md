@@ -8,7 +8,6 @@ Last verified: 2026-07-16
 - The active plugin entry is `src/index.tsx`; it registers the bottom-bar UI.
 - The implemented UI areas are the project file manager/editor, Permissions tabs for Skills/Tools/MCPs, and the standalone MCP connection panel.
 - Configuration editing is implemented through `src/config-helper.ts` with JSONC comment preservation.
-- `src/nfm-full.tsx` remains as an older, currently unused file-manager implementation.
 
 ## Validation
 
@@ -25,5 +24,4 @@ Last verified: 2026-07-16
 ## Follow-ups
 
 - Add focused automated tests for file operations, permission/config mutation, MCP connection toggling, and viewer search/edit behavior.
-- Decide whether `src/nfm-full.tsx` should be retained as reference code or removed after confirming it is no longer needed.
 - Create the initial Git commit once the desired project baseline and test coverage are agreed.

@@ -21,7 +21,6 @@ Type check: `bun run typecheck`
 - `src/panel-permissions.tsx` — Three-tab dialog (Skills/Tools/MCPs) using `<select>` + property mutation to toggle allow/deny/ask.
 - `src/new-panel-mcp.tsx` — Standalone MCP connection panel with `<select>` list and right-side detail/status panel. Toggle connect/disconnect via double-click or Enter.
 - `src/config-helper.ts` — Read/write `opencode.jsonc` via `jsonc-parser` (preserves comments). `findConfig` walks up from directory to worktree root.
-- `src/nfm-full.tsx` — Earlier file manager implementation (not currently imported; `new-file-manager.tsx` is the active version).
 
 ## Conventions
 
