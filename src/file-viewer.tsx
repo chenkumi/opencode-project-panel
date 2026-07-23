@@ -341,10 +341,10 @@ export default function FileViewer(props: Props) {
         bindings: [
             { key: "home", cmd: () => { if (previewScrollBox) previewScrollBox.scrollTop = 0 } },
             { key: "end", cmd: () => { if (previewScrollBox) previewScrollBox.scrollTop = previewScrollBox.scrollHeight - previewScrollBox.height } },
-            { key: "pageup", cmd: () => previewScrollBox?.scrollBy({ y: -(previewScrollBox?.height ?? 0) }) },
-            { key: "pagedown", cmd: () => previewScrollBox?.scrollBy({ y: previewScrollBox?.height ?? 0 }) },
-            { key: "up", cmd: () => previewScrollBox?.scrollBy({ y: -1 }) },
-            { key: "down", cmd: () => previewScrollBox?.scrollBy({ y: 1 }) },
+            { key: "up", cmd: () => previewScrollBox?.scrollBy(-1) },
+            { key: "down", cmd: () => previewScrollBox?.scrollBy(1) },
+            { key: "pageup", cmd: () => { if (previewScrollBox) { const h = previewScrollBox.height; if (h > 0) previewScrollBox.scrollTop -= h } } },
+            { key: "pagedown", cmd: () => { if (previewScrollBox) { const h = previewScrollBox.height; if (h > 0) previewScrollBox.scrollTop += h } } },
         ],
     }))
 
@@ -458,32 +458,38 @@ export default function FileViewer(props: Props) {
                 ref={(el) => { previewScrollBox = el }}
                 width="100%"
                 flexGrow={1}
-                scrollbarOptions={{ visible: true }}
+                scrollX={false}
+                scrollY={true}
+                verticalScrollbarOptions={{ visible: true }}
             >
-                <code
-                    ref={(el) => {
-                        codeRef = el
-                        el.content = originalContent
-                        el.filetype = filetype
-                    }}
-                    visible={!isMarkdown}
-                    syntaxStyle={SYNTAX_STYLE}
-                    selectable={true}
-                    width="100%"
-                    onMouseDown={() => setFocusTarget("content")}
-                />
+                <box width={panelWidth() - 1} padding={1}>
+                    <code
+                        ref={(el) => {
+                            codeRef = el
+                            el.content = originalContent
+                            el.filetype = filetype
+                        }}
+                        visible={!isMarkdown}
+                        syntaxStyle={SYNTAX_STYLE}
+                        selectable={true}
+                        width="100%"
+                        onMouseDown={() => setFocusTarget("content")}
+                        flexShrink={1}
+                    />
 
-                <markdown
-                    ref={(el) => {
-                        markdownRef = el
-                        el.content = originalContent
-                    }}
-                    visible={isMarkdown}
-                    syntaxStyle={SYNTAX_STYLE}
-                    conceal={true}
-                    fg={theme().text}
-                    width="100%"
-                />
+                    <markdown
+                        ref={(el) => {
+                            markdownRef = el
+                            el.content = originalContent
+                        }}
+                        visible={isMarkdown}
+                        syntaxStyle={SYNTAX_STYLE}
+                        conceal={true}
+                        fg={theme().text}
+                        width="100%"
+                        flexShrink={1}
+                    />
+                </box>
             </scrollbox>
 
             <textarea

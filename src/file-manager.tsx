@@ -3,9 +3,9 @@ import type { SelectOption, TextRenderable } from "@opentui/core"
 import { parseColor, RGBA, SyntaxStyle } from "@opentui/core"
 import { useBindings } from "@opentui/keymap/solid"
 import { useTerminalDimensions } from "@opentui/solid"
-import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { onCleanup } from "solid-js"
+import { onCleanup, onMount } from "solid-js"
 import FileViewer from "./file-viewer.js"
 
 interface FileEntry {
@@ -228,6 +228,19 @@ function truncateText(text: string, maxLength: number): string {
     return text.slice(0, maxLength - 1) + "…"
 }
 
+function formatMode(filePath: string): string {
+    try {
+        const s = statSync(filePath)
+        const m = s.mode
+        return (s.isDirectory() ? 'd' : '-')
+            + ((m & 256) ? 'r' : '-') + ((m & 128) ? 'w' : '-') + ((m & 64) ? 'x' : '-')
+            + ((m & 32) ? 'r' : '-') + ((m & 16) ? 'w' : '-') + ((m & 8) ? 'x' : '-')
+            + ((m & 4) ? 'r' : '-') + ((m & 2) ? 'w' : '-') + ((m & 1) ? 'x' : '-')
+    } catch {
+        return "---------"
+    }
+}
+
 export default function NewFileManager(props: Props) {
     currentFileActions = {
         create: handleCreate, rename: handleRename, delete: handleDelete, goto: handleGoto, reload: handleReload,
@@ -237,6 +250,7 @@ export default function NewFileManager(props: Props) {
         hideOverlay,
     }
     onCleanup(() => { currentFileActions = null; focusedPane = "select"; isOverlayActive = false; if (rightScrollBox && rightScrollBoxOrigBg) rightScrollBox.backgroundColor = rightScrollBoxOrigBg })
+    onMount(() => { setTimeout(() => setFocusedPane("select"), 0) })
 
     let selectRef: any
     let pathTextEl: TextRenderable
@@ -249,13 +263,15 @@ export default function NewFileManager(props: Props) {
     let rightCodeEl: any
     let lastClickTime = 0
     let lastClickIdx = 0
+    let modeLastClickTime = 0
+    let modeLastClickIdx = 0
     const dimensions = useTerminalDimensions()
     const theme = () => props.api.theme.current
 
     let currentDir = props.initialDir || props.api.state.path.directory || props.api.state.path.worktree || process.cwd()
     let entries = readDir(currentDir)
 
-    let overlayMode: "" | "confirm" | "prompt" = ""
+    let overlayMode: "" | "confirm" | "prompt" | "mode" = ""
     let overlayConfirmAction: (() => void) | null = null
     let overlayPromptAction: ((val: string) => void) | null = null
     let promptInputValue = ""
@@ -274,6 +290,9 @@ export default function NewFileManager(props: Props) {
     let promptOkBtn: any
     let promptInputEl: any
     let filterInputEl: any
+    let modeTextEl: TextRenderable
+    let modeOverlayBox: any
+    let modeSelectRef: any
     let rightScrollBox: any
     let rightScrollBoxOrigBg: any
 
@@ -285,6 +304,7 @@ export default function NewFileManager(props: Props) {
         currentEntry = filteredEntries[0] ?? null
         if (currentEntry) setRightPanel(currentEntry)
         else setRightPanel(null)
+        updateModeDisplay()
     }
 
     function navigateTo(dir: string) {
@@ -299,6 +319,7 @@ export default function NewFileManager(props: Props) {
         currentEntry = entries[0] ?? null
         if (entries[0]) setRightPanel(entries[0])
         else setRightPanel(null)
+        updateModeDisplay()
     }
 
     function handleReload() {
@@ -318,6 +339,7 @@ export default function NewFileManager(props: Props) {
             if (filteredEntries.length > 0) selectRef.setSelectedIndex(0)
             setRightPanel(currentEntry)
         }
+        updateModeDisplay()
     }
 
     function setRightPanel(entry: FileEntry | null) {
@@ -411,11 +433,12 @@ export default function NewFileManager(props: Props) {
 
     const handleChange = (_index: number, option: SelectOption | null) => {
         const fullPath = option?.value
-        if (!fullPath) { currentEntry = null; setRightPanel(null); return }
+        if (!fullPath) { currentEntry = null; setRightPanel(null); updateModeDisplay(); return }
         const entry = entries.find((e) => e.fullPath === fullPath) ?? null
         currentEntry = entry
         if (entry) setRightPanel(entry)
         else setRightPanel(null)
+        updateModeDisplay()
     }
 
     function showConfirm(message: string, onConfirm: () => void) {
@@ -429,6 +452,14 @@ export default function NewFileManager(props: Props) {
         promptOverlayBox.visible = false
     }
 
+    function updateModeDisplay() {
+        if (!modeTextEl) return
+        const path = currentEntry?.fullPath
+        const isParent = currentEntry?.name === ".."
+        modeTextEl.content = path ? formatMode(path) : "---------"
+        modeTextEl.fg = isParent ? theme().textMuted : FG
+    }
+
     function hideOverlay() {
         overlayMode = ""
         isOverlayActive = false
@@ -437,6 +468,7 @@ export default function NewFileManager(props: Props) {
         mainContentBox.visible = true
         confirmOverlayBox.visible = false
         promptOverlayBox.visible = false
+        modeOverlayBox.visible = false
         navigateTo(currentDir)
         if (selectRef) selectRef.focus()
     }
@@ -560,6 +592,57 @@ export default function NewFileManager(props: Props) {
         if (promptInputEl) promptInputEl.focus()
     }
 
+    function showModeOverlay() {
+        const path = currentEntry?.fullPath
+        if (!path) return
+        if (currentEntry?.name === "..") return
+        overlayMode = "mode"
+        isOverlayActive = true
+        modeSelectRef.options = getModeOptions()
+        mainContentBox.visible = false
+        confirmOverlayBox.visible = false
+        promptOverlayBox.visible = false
+        modeOverlayBox.visible = true
+        if (modeSelectRef) modeSelectRef.focus()
+    }
+
+    function getModeOptions(): SelectOption[] {
+        const path = currentEntry?.fullPath
+        if (!path) return []
+        try {
+            const m = statSync(path).mode
+            const ch = (mask: number) => (m & mask) !== 0 ? "✓" : " "
+            const groups = [
+                { label: "Owner", bits: [{ mask: 256, name: "Read" }, { mask: 128, name: "Write" }, { mask: 64, name: "Exec" }] },
+                { label: "Group", bits: [{ mask: 32, name: "Read" }, { mask: 16, name: "Write" }, { mask: 8, name: "Exec" }] },
+                { label: "Other", bits: [{ mask: 4, name: "Read" }, { mask: 2, name: "Write" }, { mask: 1, name: "Exec" }] },
+            ]
+            const result: SelectOption[] = []
+            for (const g of groups) {
+                for (const b of g.bits) {
+                    result.push({
+                        name: `[${ch(b.mask)}] ${g.label} ${b.name}`,
+                        description: "",
+                        value: b.mask,
+                    })
+                }
+            }
+            return result
+        } catch { return [] }
+    }
+
+    function handleModeToggle(_i: number, opt: SelectOption | null) {
+        const path = currentEntry?.fullPath
+        if (!path || !opt) return
+        const bit = opt.value as number
+        try {
+            const s = statSync(path)
+            chmodSync(path, s.mode ^ bit)
+            updateModeDisplay()
+            modeSelectRef.options = getModeOptions()
+        } catch { /* ignore */ }
+    }
+
     const projectRoot = () => props.api.state.path.directory || props.api.state.path.worktree
 
     function returnToProjectRoot() {
@@ -657,6 +740,10 @@ export default function NewFileManager(props: Props) {
                             <text fg={HINT_FG}>[F5]</text>
                             <text fg={FG}> Reload</text>
                         </box>
+                        <box flexDirection="row" gap={0} onMouseUp={() => handleGoto()}>
+                            <text fg={HINT_FG}>[Ctrl+G]</text>
+                            <text fg={FG}> Goto</text>
+                        </box>
                     </box>
                     <box flexGrow={1} />
                     <box flexDirection="row" gap={0} onMouseUp={() => props.api.ui.dialog.clear()}>
@@ -673,6 +760,8 @@ export default function NewFileManager(props: Props) {
                         options={toOptions(filteredEntries)}
                         showDescription={false}
                         focused={true}
+                        selectedBackgroundColor={theme().primary}
+                        selectedTextColor={theme().selectedListItemText}
                         onChange={handleChange}
                         onSelect={handleSelect}
                         height="100%"
@@ -711,10 +800,12 @@ export default function NewFileManager(props: Props) {
                         width={rightWidth()}
                         height="100%"
                         backgroundColor={theme().backgroundPanel}
-                        scrollbarOptions={{ visible: false }}
+                        scrollX={false}
+                        scrollY={true}
+                        verticalScrollbarOptions={{ visible: true }}
                         onMouseDown={() => { setFocusedPane("preview") }}
                     >
-                        <box padding={1} flexDirection="column" gap={1}>
+                        <box width={rightWidth() - 1} minWidth={0} flexShrink={1} padding={1} flexDirection="column" gap={1}>
                             <text ref={(el) => { rightNameEl = el }} fg={theme().text}>
                                 {first ? first.name : ""}
                             </text>
@@ -733,6 +824,7 @@ export default function NewFileManager(props: Props) {
                                 conceal={true}
                                 fg={theme().text}
                                 width="100%"
+                                flexShrink={1}
                                 visible={false}
                             />
                             <code
@@ -741,6 +833,7 @@ export default function NewFileManager(props: Props) {
                                 filetype=""
                                 syntaxStyle={SYNTAX_STYLE}
                                 width="100%"
+                                flexShrink={1}
                                 visible={false}
                             />
                         </box>
@@ -748,7 +841,7 @@ export default function NewFileManager(props: Props) {
                 </box>
 
                 <box ref={(el) => { confirmOverlayBox = el }} visible={false} flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" backgroundColor={theme().backgroundPanel}>
-                    <box padding={2} flexDirection="column" gap={1} backgroundColor={theme().backgroundElement}>
+                    <box paddingX={2} paddingY={1} flexDirection="column" gap={1} backgroundColor={theme().backgroundElement}>
                         <text ref={(el) => { confirmTitleEl = el }} fg={theme().text} />
                         <text ref={(el) => { confirmMessageEl = el }} fg={theme().textMuted} />
                         <box flexDirection="row" justifyContent="flex-end" gap={1}>
@@ -765,7 +858,7 @@ export default function NewFileManager(props: Props) {
                 </box>
 
                 <box ref={(el) => { promptOverlayBox = el }} visible={false} flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" backgroundColor={theme().backgroundPanel}>
-                    <box padding={2} flexDirection="column" gap={1} backgroundColor={theme().backgroundElement}>
+                    <box paddingX={2} paddingY={1} flexDirection="column" gap={1} backgroundColor={theme().backgroundElement}>
                         <text ref={(el) => { promptTitleEl = el }} fg={theme().text} />
                         <text ref={(el) => { promptMessageEl = el }} fg={theme().textMuted} />
                         <input
@@ -787,6 +880,43 @@ export default function NewFileManager(props: Props) {
                         </box>
                     </box>
                 </box>
+
+                <box ref={(el) => { modeOverlayBox = el }} visible={false} flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" backgroundColor={theme().backgroundPanel}>
+                    <box padding={2} flexDirection="column" gap={1} backgroundColor={theme().backgroundElement} width={30}>
+                        <text fg={theme().text}>File Mode</text>
+                        <select
+                            ref={(el) => { modeSelectRef = el }}
+                            options={[]}
+                            showDescription={false}
+                            focused={true}
+                            selectedBackgroundColor={theme().primary}
+                            selectedTextColor={theme().selectedListItemText}
+                            onSelect={handleModeToggle}
+                            height={12}
+                            onMouseDown={(event: any) => {
+                                modeSelectRef?.focus()
+                                const opts = modeSelectRef.options
+                                const visibleIdx = Math.floor(event.y - modeSelectRef.screenY)
+                                if (visibleIdx >= 0 && visibleIdx < opts.length) {
+                                    const now = Date.now()
+                                    if (visibleIdx === modeLastClickIdx && now - modeLastClickTime < 500) {
+                                        handleModeToggle(visibleIdx, opts[visibleIdx])
+                                    } else {
+                                        modeSelectRef.setSelectedIndex(visibleIdx)
+                                    }
+                                    modeLastClickTime = now
+                                    modeLastClickIdx = visibleIdx
+                                }
+                            }}
+                        />
+                        <box flexDirection="row" justifyContent="flex-end" gap={1}>
+                            <box paddingLeft={2} paddingRight={2} flexDirection="row" onMouseUp={() => hideOverlay()}>
+                                <text fg={HINT_FG}>[ESC]</text>
+                                <text fg={FG}> Close</text>
+                            </box>
+                        </box>
+                    </box>
+                </box>
             </box>
 
             <box paddingLeft={2} paddingTop={1} flexShrink={0} flexDirection="row" gap={3}>
@@ -802,9 +932,9 @@ export default function NewFileManager(props: Props) {
                     <text fg={theme().textMuted}>[Del]</text>
                     <text fg={FG}> Delete</text>
                 </box>
-                <box flexDirection="row" gap={0} onMouseUp={() => handleGoto()}>
-                    <text fg={theme().textMuted}>[Ctrl+G]</text>
-                    <text fg={FG}> Goto</text>
+                <box flexDirection="row" gap={0} onMouseUp={() => showModeOverlay()}>
+                    <text fg={HINT_FG}>Mode:</text>
+                    <text ref={(el) => { modeTextEl = el; updateModeDisplay() }}></text>
                 </box>
                 <box flexGrow={1} flexDirection="row" border={["bottom"]} borderColor={theme().textMuted} onMouseDown={() => { setFocusedPane("filter") }}>
                     <text fg={HINT_FG}>[Ctrl+F]</text>
@@ -845,9 +975,11 @@ function FilePreviewDialog(props: { api: TuiPluginApi; path: string; content: st
             width="100%"
             height="100%"
             backgroundColor={theme().backgroundPanel}
+            scrollX={false}
+            scrollY={true}
             scrollbarOptions={{ visible: false }}
         >
-            <box padding={1}>
+            <box width="100%" minWidth={0} flexShrink={1} padding={1}>
                 <text fg={theme().textMuted}>{props.path}</text>
                 <text fg={theme().text}>{props.content}</text>
             </box>

@@ -3,7 +3,7 @@ import { RGBA } from "@opentui/core"
 import { useBindings } from "@opentui/keymap/solid"
 import { existsSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import type { JSX } from "solid-js"
+import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { findConfig, readMCPs, readPermissions, readTools } from "./config-helper.js"
 import NewFileManager, { currentFileActions, focusedPane, isOverlayActive } from "./file-manager.js"
 import PermissionsPanel from "./panel-permissions.js"
@@ -76,6 +76,46 @@ const EmptyBorder = {
 
 export default function BottomBar(props: Props) {
     const api = props.api
+    const [latestSession, setLatestSession] = createSignal<{ id: string; title: string } | undefined>()
+    const [currentSessionID, setCurrentSessionID] = createSignal<string | undefined>()
+
+    async function fetchLatestSession() {
+        try {
+            const res = await api.client.session.list({ limit: 1 }, { throwOnError: true }) as any
+            const data: Array<{ id: string; title: string }> | undefined = res.data
+            if (data && data.length > 0) {
+                setLatestSession(data[0])
+            }
+            if (api.route.current.name !== "session") {
+                setCurrentSessionID(undefined)
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    function openLatestSession() {
+        const s = latestSession()
+        if (s) {
+            setCurrentSessionID(s.id)
+            api.client.tui.selectSession({ sessionID: s.id })
+        }
+    }
+
+    onMount(() => {
+        if (api.route.current.name === "session") {
+            setCurrentSessionID((api.route.current as any).params?.sessionID)
+        }
+        fetchLatestSession()
+        const unsubs: Array<() => void> = []
+        for (const evt of ["session.created", "session.updated", "session.deleted"]) {
+            unsubs.push(api.event.on(evt, fetchLatestSession))
+        }
+        unsubs.push(api.event.on("tui.session.select", (e: any) => {
+            setCurrentSessionID(e.properties?.sessionID)
+        }))
+        onCleanup(() => unsubs.forEach((fn) => fn()))
+    })
 
     useBindings(() => ({
         priority: 1,
@@ -101,10 +141,21 @@ export default function BottomBar(props: Props) {
                     showPermissions(api)
                 },
             },
+            {
+                name: "home.session.open",
+                title: "Open latest session",
+                category: "Tools",
+                namespace: "palette",
+                slashName: "session",
+                run() {
+                    openLatestSession()
+                },
+            },
         ],
         bindings: [
             { key: "f1", cmd: "home.files.open", desc: "Open file browser" },
             { key: "f3", cmd: "home.permissions.open", desc: "Open permissions" },
+            { key: "f6", cmd: "home.session.open", desc: "Open latest session" },
             { key: "f7", cmd: () => currentFileActions?.create?.() },
             { key: "f2", cmd: () => currentFileActions?.rename?.() },
             { key: "f5", cmd: () => currentFileActions?.reload?.() },
@@ -151,6 +202,21 @@ export default function BottomBar(props: Props) {
                 <box flexDirection="row" gap={0} onMouseUp={() => showPermissions(api)}>
                     <text fg={HINT_FG}>[F3]</text>
                     <text fg={FG}> Permissions</text>
+                </box>
+                <box flexGrow={1} flexDirection="row" gap={0}
+                    onMouseUp={openLatestSession}>
+                    {(() => {
+                        if (currentSessionID()) return <text />
+                        const s = latestSession()
+                        if (!s) return <text />
+                        return (
+                            <>
+                                <text fg={HINT_FG} marginRight={1}>[F6]</text>
+                                <text fg={FG} marginRight={1}>Last Session:</text>
+                                <text fg={FG} truncate wrapMode="none">{s.title}</text>
+                            </>
+                        )
+                    })()}
                 </box>
             </box>
             <box

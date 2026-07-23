@@ -1,6 +1,6 @@
 {
   "name": "opencode-project-panel",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "OpenCode TUI plugin with a file manager and permissions panels",
   "repository": {
