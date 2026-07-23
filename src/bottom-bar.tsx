@@ -108,10 +108,10 @@ export default function BottomBar(props: Props) {
         }
         fetchLatestSession()
         const unsubs: Array<() => void> = []
-        for (const evt of ["session.created", "session.updated", "session.deleted"]) {
+        for (const evt of ["session.created", "session.updated", "session.deleted"] as const) {
             unsubs.push(api.event.on(evt, fetchLatestSession))
         }
-        unsubs.push(api.event.on("tui.session.select", (e: any) => {
+        unsubs.push(api.event.on("tui.session.select" as any, (e: any) => {
             setCurrentSessionID(e.properties?.sessionID)
         }))
         onCleanup(() => unsubs.forEach((fn) => fn()))
