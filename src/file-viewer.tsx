@@ -3,9 +3,17 @@ import type { TextRenderable } from "@opentui/core"
 import { RGBA, SyntaxStyle, parseColor } from "@opentui/core"
 import { useBindings } from "@opentui/keymap/solid"
 import { useTerminalDimensions } from "@opentui/solid"
-import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { Show, createSignal, onMount } from "solid-js"
+import {
+    MAX_EDIT_BYTES,
+    MAX_PREVIEW_BYTES,
+    MAX_SEARCH_MATCHES,
+    readTextFile,
+    writeTextFileAtomic,
+    type FileRevision,
+    type TextReadResult,
+} from "./file-io.js"
 
 interface Props {
     api: TuiPluginApi
@@ -108,6 +116,8 @@ function isMarkdownPath(fp: string): boolean {
 
 const HINT_FG = RGBA.fromInts(180, 180, 180, 255)
 const FG = RGBA.fromInts(255, 255, 255, 255)
+// OpenTUI's native EditBuffer plainText accessor is capped at 1 MiB.
+const MAX_EDITOR_BYTES = 1024 * 1024
 
 export default function FileViewer(props: Props) {
     let codeRef: any
@@ -121,6 +131,7 @@ export default function FileViewer(props: Props) {
     let editButtonsBox: any
     let searchBox: any
     let bottomBarBox: any
+    let statusEl: TextRenderable
     const dimensions = useTerminalDimensions()
     const theme = () => props.api.theme.current
 
@@ -131,18 +142,57 @@ export default function FileViewer(props: Props) {
     const [focusedId, setFocusedId] = createSignal<FocusTarget>("content")
     const [textareaTarget, setTextareaTarget] = createSignal<any>()
     const [searchInputTarget, setSearchInputTarget] = createSignal<any>()
+    const [closeConfirm, setCloseConfirm] = createSignal(false)
 
     let dirty = false
     let originalContent = ""
+    let previewContent = ""
+    let originalRevision: FileRevision | undefined
+    let statusMessage = ""
     let searchQuery = ""
     let matches: SearchMatch[] = []
     let currentMatch = -1
+    let matchesTruncated = false
 
-    try {
-        originalContent = readFileSync(props.filePath, "utf-8")
-    } catch {
-        originalContent = "// Error reading file"
+    function setStatus(message: string) {
+        statusMessage = message
+        if (statusEl) statusEl.content = message
     }
+
+    function applyReadResult(result: TextReadResult, purpose: "preview" | "edit"): boolean {
+        if (result.status === "error") {
+            setStatus("Read failed")
+            return false
+        }
+        if (result.status === "binary") {
+            setStatus("Binary file")
+            return false
+        }
+        if (result.status === "too-large") {
+            setStatus(purpose === "edit" ? "Too large for editor (1 MiB limit)" : "Too large for preview")
+            return false
+        }
+
+        if (purpose === "preview") {
+            previewContent = result.content
+            originalContent = result.content
+        } else {
+            originalContent = result.content
+        }
+        originalRevision = result.revision
+        setStatus(result.status === "truncated" ? "Preview truncated at 1 MiB" : "")
+        return true
+    }
+
+    function loadFromDisk(purpose: "preview" | "edit"): boolean {
+        return applyReadResult(readTextFile(
+            props.filePath,
+            purpose === "preview" ? MAX_PREVIEW_BYTES : Math.min(MAX_EDIT_BYTES, MAX_EDITOR_BYTES),
+            purpose,
+        ), purpose)
+    }
+
+    loadFromDisk("preview")
 
     const panelWidth = () => Math.min(Math.max(dimensions().width - 2, 60), 116)
     const panelHeight = () => Math.max(Math.floor(dimensions().height * 0.78) - 2, 22)
@@ -151,7 +201,7 @@ export default function FileViewer(props: Props) {
         if (matches.length === 0) {
             matchCountEl.content = searchQuery ? "0/0" : ""
         } else {
-            matchCountEl.content = `${currentMatch + 1}/${matches.length}`
+            matchCountEl.content = `${currentMatch + 1}/${matches.length}${matchesTruncated ? "+" : ""}`
         }
     }
 
@@ -182,36 +232,48 @@ export default function FileViewer(props: Props) {
         if (searchBox) searchBox.visible = !isPrev
         if (bottomBarBox) bottomBarBox.paddingBottom = isPrev ? 1 : 0
         if (isPrev) {
-            if (isMarkdown) markdownRef.content = originalContent
-            else codeRef.content = originalContent
+            if (isMarkdown) markdownRef.content = previewContent
+            else codeRef.content = previewContent
         } else {
             textareaRef.setText(originalContent)
         }
         setFocusTarget("content")
     }
 
-    const switchMode = setModeVisible
+    function switchMode(next: Mode) {
+        if (next === "edit" && mode() !== "edit") {
+            if (!loadFromDisk("edit")) return
+            if (isMarkdown) markdownRef.content = originalContent
+            else codeRef.content = originalContent
+        }
+        setModeVisible(next)
+    }
 
     function reload() {
-        try {
-            const content = readFileSync(props.filePath, "utf-8")
-            originalContent = content
-            if (isMarkdown) markdownRef.content = content
-            else codeRef.content = content
-            textareaRef.setText(content)
-        } catch { /* ignore */ }
+        if (!loadFromDisk(mode())) return
+        if (isMarkdown) markdownRef.content = originalContent
+        else codeRef.content = originalContent
+        textareaRef.setText(originalContent)
         dirty = false
         dirtyEl.content = ""
         matches = []
         currentMatch = -1
+        matchesTruncated = false
         refreshMatchCount()
     }
 
     function save() {
-        try {
-            writeFileSync(props.filePath, textareaRef.plainText, "utf-8")
-            originalContent = textareaRef.plainText
-        } catch { /* ignore */ }
+        const result = writeTextFileAtomic(props.filePath, textareaRef.plainText, originalRevision)
+        if (result.status !== "ok") {
+            const message = result.status === "conflict"
+                ? "The file changed externally. Reload before saving."
+                : "Unable to save file."
+            props.api.ui.toast({ variant: "error", title: "File Viewer", message })
+            return
+        }
+        originalContent = textareaRef.plainText
+        originalRevision = result.revision
+        loadFromDisk("preview")
         dirty = false
         dirtyEl.content = ""
         setModeVisible("preview")
@@ -219,6 +281,7 @@ export default function FileViewer(props: Props) {
 
     function cancelEdit() {
         textareaRef.setText(originalContent)
+        loadFromDisk("preview")
         dirty = false
         dirtyEl.content = ""
         setModeVisible("preview")
@@ -243,12 +306,9 @@ export default function FileViewer(props: Props) {
         else cancelEdit()
     }
 
-    function offsetExcludingNewlines(text: string, offset: number): number {
-        let nl = 0
-        for (let i = 0; i < offset && i < text.length; i++) {
-            if (text[i] === "\n") nl++
-        }
-        return offset - nl
+    function requestBack() {
+        if (dirty) setCloseConfirm(true)
+        else props.onBack?.()
     }
 
     function computeMatches(query: string) {
@@ -258,19 +318,21 @@ export default function FileViewer(props: Props) {
         if (!query) {
             matches = []
             currentMatch = -1
+            matchesTruncated = false
             refreshMatchCount()
             return
         }
         const found: SearchMatch[] = []
         const text = textareaRef.plainText
         let pos = 0
-        while (pos <= text.length) {
+        while (pos <= text.length && found.length < MAX_SEARCH_MATCHES) {
             const idx = text.indexOf(query, pos)
             if (idx === -1) break
             found.push({ start: idx, end: idx + query.length })
             pos = idx + query.length
         }
         matches = found
+        matchesTruncated = pos <= text.length && text.indexOf(query, pos) !== -1
         currentMatch = matches.length > 0 ? 0 : -1
         applyHighlights()
         refreshMatchCount()
@@ -281,10 +343,19 @@ export default function FileViewer(props: Props) {
         if (!textareaRef || !matches.length) return
         const text = textareaRef.plainText
         textareaRef.clearAllHighlights()
+        let scan = 0
+        let newlines = 0
+        const displayOffset = (offset: number) => {
+            while (scan < offset && scan < text.length) {
+                if (text[scan] === "\n") newlines++
+                scan++
+            }
+            return offset - newlines
+        }
         matches.forEach((m, i) => {
             textareaRef.addHighlightByCharRange({
-                start: offsetExcludingNewlines(text, m.start),
-                end: offsetExcludingNewlines(text, m.end),
+                start: displayOffset(m.start),
+                end: displayOffset(m.end),
                 styleId: i === currentMatch ? SEARCH_CURRENT_HL_STYLE_ID : SEARCH_HL_STYLE_ID,
                 hlRef: i,
             })
@@ -394,9 +465,19 @@ export default function FileViewer(props: Props) {
             {
                 key: "escape",
                 cmd: () => {
-                    if (props.onBack) props.onBack()
+                    requestBack()
+                    return true
                 },
             },
+        ],
+    }))
+
+    useBindings(() => ({
+        priority: 3,
+        enabled: () => closeConfirm(),
+        bindings: [
+            { key: "escape", cmd: () => { setCloseConfirm(false); return true } },
+            { key: "return", cmd: () => { props.onBack?.(); return true } },
         ],
     }))
 
@@ -443,11 +524,11 @@ export default function FileViewer(props: Props) {
                         </box>
                     </Show>
 
+                    <text ref={(el) => { statusEl = el }} fg={theme().textMuted}>{statusMessage}</text>
+
                     <box flexGrow={1} />
 
-                    <box flexDirection="row" onMouseUp={() => {
-                        if (props.onBack) props.onBack()
-                    }}>
+                    <box flexDirection="row" onMouseUp={requestBack}>
                         <text fg={HINT_FG}>[ESC]</text>
                         <text fg={FG}> Close</text>
                     </box>
@@ -563,6 +644,34 @@ export default function FileViewer(props: Props) {
                     </box>
                 </box>
             </box>
+
+            <Show when={closeConfirm()}>
+                <box
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    width="100%"
+                    height="100%"
+                    zIndex={100}
+                    backgroundColor={theme().backgroundPanel}
+                    alignItems="center"
+                    justifyContent="center"
+                >
+                    <box width={Math.min(panelWidth() - 8, 72)} border={true} borderColor={theme().textMuted} padding={2} flexDirection="column" gap={1}>
+                        <text fg={theme().text}>Discard unsaved changes?</text>
+                        <box flexDirection="row" gap={3}>
+                            <box onMouseDown={() => { setCloseConfirm(false); props.onBack?.() }}>
+                                <text fg={HINT_FG}>[Enter]</text>
+                                <text fg={theme().text}> Discard</text>
+                            </box>
+                            <box onMouseDown={() => setCloseConfirm(false)}>
+                                <text fg={HINT_FG}>[Esc]</text>
+                                <text fg={theme().text}> Keep editing</text>
+                            </box>
+                        </box>
+                    </box>
+                </box>
+            </Show>
         </box>
     )
 }

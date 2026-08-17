@@ -1,15 +1,44 @@
-import type { ModificationOptions } from "jsonc-parser"
-import { applyEdits, modify, stripComments } from "jsonc-parser"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import type { ModificationOptions, ParseError } from "jsonc-parser"
+import { applyEdits, modify, parse } from "jsonc-parser"
+import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
+import {
+    readFileRevision,
+    sameFileRevision,
+    type FileRevision,
+    writeTextFileAtomic,
+} from "./file-io.js"
+
+export type ConfigData = {
+    skillAllow: string[]
+    skillDeny: string[]
+    tools: Record<string, string>
+    mcps: Array<{ name: string; type: string; enabled: boolean; command?: string[]; url?: string }>
+}
+
+export type ConfigLoadResult =
+    | { status: "ok"; filePath: string; raw: string; data: ConfigData; revision: FileRevision }
+    | { status: "missing"; filePath: string; raw: ""; data: ConfigData; revision: undefined }
+    | { status: "invalid"; filePath: string; error: Error; revision?: FileRevision }
+    | { status: "error"; filePath: string; error: unknown; revision?: FileRevision }
+
+export type ConfigMutationResult =
+    | { status: "ok"; revision: FileRevision }
+    | { status: "conflict"; current?: FileRevision }
+    | { status: "invalid"; error: Error }
+    | { status: "error"; error: unknown }
+
+function emptyConfigData(): ConfigData {
+    return { skillAllow: [], skillDeny: [], tools: {}, mcps: [] }
+}
 
 export function findConfig(directory: string, worktree: string): string | null {
     let current = path.resolve(directory)
     const root = path.resolve(worktree)
-    while (current.startsWith(root)) {
+    while (isWithin(root, current)) {
         for (const name of ["opencode.jsonc", "opencode.json"]) {
-            const fp = path.join(current, name)
-            if (existsSync(fp)) return fp
+            const filePath = path.join(current, name)
+            if (existsSync(filePath)) return filePath
         }
         if (current === root) break
         const next = path.dirname(current)
@@ -17,6 +46,11 @@ export function findConfig(directory: string, worktree: string): string | null {
         current = next
     }
     return null
+}
+
+function isWithin(root: string, candidate: string): boolean {
+    const relative = path.relative(root, candidate)
+    return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
 }
 
 function detectIndent(text: string): ModificationOptions["formattingOptions"] {
@@ -28,92 +62,137 @@ function detectIndent(text: string): ModificationOptions["formattingOptions"] {
     return { tabSize: 2, insertSpaces: true }
 }
 
-export function readPermissions(filePath: string): { allow: string[]; deny: string[] } {
-    const result: { allow: string[]; deny: string[] } = { allow: [], deny: [] }
-    try {
-        const raw = readFileSync(filePath, "utf-8")
-        const text = stripComments(raw)
-        const data = JSON.parse(text)
-        const skill = data?.permission?.skill
-        if (!skill) return result
-        if (typeof skill === "string") {
-            if (skill === "allow") result.allow.push("*")
-            else if (skill === "deny") result.deny.push("*")
-            return result
+function parseConfig(filePath: string, raw: string, revision: FileRevision): ConfigLoadResult {
+    const errors: ParseError[] = []
+    const value = parse(raw, errors, { allowTrailingComma: true })
+    if (errors.length > 0 || !value || typeof value !== "object" || Array.isArray(value)) {
+        return {
+            status: "invalid",
+            filePath,
+            revision,
+            error: new Error("Invalid OpenCode JSONC configuration"),
         }
-        if (typeof skill === "object" && !Array.isArray(skill)) {
-            for (const [k, v] of Object.entries(skill)) {
-                if (v === "allow") result.allow.push(k)
-                else if (v === "deny") result.deny.push(k)
-            }
+    }
+
+    const data = emptyConfigData()
+    const skill = value.permission?.skill
+    if (skill === "allow") data.skillAllow.push("*")
+    else if (skill === "deny") data.skillDeny.push("*")
+    else if (skill && typeof skill === "object" && !Array.isArray(skill)) {
+        for (const [name, action] of Object.entries(skill)) {
+            if (action === "allow") data.skillAllow.push(name)
+            else if (action === "deny") data.skillDeny.push(name)
         }
-    } catch { }
-    return result
+    }
+
+    const permission = value.permission
+    if (permission && typeof permission === "object" && !Array.isArray(permission)) {
+        for (const [name, action] of Object.entries(permission)) {
+            if (name !== "skill" && typeof action === "string") data.tools[name] = action
+        }
+    }
+
+    const mcp = value.mcp
+    if (mcp && typeof mcp === "object" && !Array.isArray(mcp)) {
+        for (const [name, config] of Object.entries(mcp)) {
+            const item = config && typeof config === "object" ? config as Record<string, any> : {}
+            data.mcps.push({
+                name,
+                type: typeof item.type === "string" ? item.type : "local",
+                enabled: item.enabled !== false,
+                command: Array.isArray(item.command) ? item.command : undefined,
+                url: typeof item.url === "string" ? item.url : undefined,
+            })
+        }
+    }
+
+    return { status: "ok", filePath, raw, data, revision }
 }
 
-export function setPermission(filePath: string, skillName: string, action: "allow" | "deny"): void {
+export function loadConfig(filePath: string): ConfigLoadResult {
+    if (!existsSync(filePath)) return { status: "missing", filePath, raw: "", data: emptyConfigData(), revision: undefined }
+
+    const revision = readFileRevision(filePath)
+    if (!revision) return { status: "error", filePath, error: new Error("Unable to stat configuration file") }
+
     try {
-        let text = readFileSync(filePath, "utf-8")
-        const opts: ModificationOptions = { formattingOptions: detectIndent(text) }
-        const edits = modify(text, ["permission", "skill", skillName], action, opts)
-        text = applyEdits(text, edits)
-        writeFileSync(filePath, text, "utf-8")
-    } catch { }
+        const raw = readFileSync(filePath, "utf-8")
+        const after = readFileRevision(filePath)
+        if (!after || !sameFileRevision(revision, after)) {
+            return { status: "error", filePath, error: new Error("Configuration changed while reading"), revision: after }
+        }
+        return parseConfig(filePath, raw, after)
+    } catch (error) {
+        return { status: "error", filePath, error, revision }
+    }
+}
+
+export function readPermissions(filePath: string): { allow: string[]; deny: string[] } {
+    const result = loadConfig(filePath)
+    return result.status === "ok" || result.status === "missing"
+        ? { allow: result.data.skillAllow, deny: result.data.skillDeny }
+        : { allow: [], deny: [] }
 }
 
 export function readTools(filePath: string): Record<string, string> {
+    const result = loadConfig(filePath)
+    return result.status === "ok" || result.status === "missing" ? result.data.tools : {}
+}
+
+export function readMCPs(filePath: string): ConfigData["mcps"] {
+    const result = loadConfig(filePath)
+    return result.status === "ok" || result.status === "missing" ? result.data.mcps : []
+}
+
+const EMPTY_CONFIG = "{\n  \"$schema\": \"https://opencode.ai/config.json\"\n}\n"
+
+function setConfigValue(
+    filePath: string,
+    jsonPath: Array<string | number>,
+    value: unknown,
+    expected?: FileRevision,
+): ConfigMutationResult {
+    const current = readFileRevision(filePath)
+    const loaded = current ? loadConfig(filePath) : undefined
+    if (loaded?.status === "invalid") return { status: "invalid", error: loaded.error }
+    if (loaded?.status === "error") return { status: "error", error: loaded.error }
+
     try {
-        const raw = readFileSync(filePath, "utf-8")
-        const text = stripComments(raw)
-        const data = JSON.parse(text)
-        const permission = data?.permission
-        if (!permission || typeof permission !== "object") return {}
-        const result: Record<string, string> = {}
-        for (const [k, v] of Object.entries(permission)) {
-            if (k === "skill") continue
-            if (typeof v === "string") result[k] = v
-        }
-        return result
-    } catch {
-        return {}
+        const raw = loaded?.status === "ok" ? loaded.raw : EMPTY_CONFIG
+        const edits = modify(raw, jsonPath, value, { formattingOptions: detectIndent(raw) })
+        const text = applyEdits(raw, edits)
+        const write = writeTextFileAtomic(filePath, text, expected ?? current)
+        if (write.status === "ok") return write
+        if (write.status === "conflict") return write
+        return write
+    } catch (error) {
+        return { status: "error", error }
     }
 }
 
-export function setToolPermission(filePath: string, tool: string, action: "allow" | "ask" | "deny"): void {
-    try {
-        let text = readFileSync(filePath, "utf-8")
-        const opts: ModificationOptions = { formattingOptions: detectIndent(text) }
-        const edits = modify(text, ["permission", tool], action, opts)
-        text = applyEdits(text, edits)
-        writeFileSync(filePath, text, "utf-8")
-    } catch { }
+export function setPermission(
+    filePath: string,
+    skillName: string,
+    action: "allow" | "deny",
+    expected?: FileRevision,
+): ConfigMutationResult {
+    return setConfigValue(filePath, ["permission", "skill", skillName], action, expected)
 }
 
-export function readMCPs(filePath: string): Array<{ name: string; type: string; enabled: boolean; command?: string[]; url?: string }> {
-    try {
-        const raw = readFileSync(filePath, "utf-8")
-        const text = stripComments(raw)
-        const data = JSON.parse(text)
-        const mcp = data?.mcp
-        if (!mcp || typeof mcp !== "object") return []
-        return Object.entries(mcp).map(([name, cfg]: [string, any]) => ({
-            name,
-            type: cfg?.type ?? "local",
-            enabled: cfg?.enabled !== false,
-            command: cfg?.command,
-            url: cfg?.url,
-        }))
-    } catch {
-        return []
-    }
+export function setToolPermission(
+    filePath: string,
+    tool: string,
+    action: "allow" | "ask" | "deny",
+    expected?: FileRevision,
+): ConfigMutationResult {
+    return setConfigValue(filePath, ["permission", tool], action, expected)
 }
 
-export function setMCPEnabled(filePath: string, name: string, enabled: boolean): void {
-    try {
-        let text = readFileSync(filePath, "utf-8")
-        const opts: ModificationOptions = { formattingOptions: detectIndent(text) }
-        const edits = modify(text, ["mcp", name, "enabled"], enabled, opts)
-        text = applyEdits(text, edits)
-        writeFileSync(filePath, text, "utf-8")
-    } catch { }
+export function setMCPEnabled(
+    filePath: string,
+    name: string,
+    enabled: boolean,
+    expected?: FileRevision,
+): ConfigMutationResult {
+    return setConfigValue(filePath, ["mcp", name, "enabled"], enabled, expected)
 }

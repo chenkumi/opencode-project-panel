@@ -86,6 +86,15 @@ The package entry point is the generated `dist/index.js` file. Runtime UI
 dependencies remain external in the bundle and are declared in `dependencies`
 so OpenCode's Bun-based plugin loader can resolve them.
 
+## CHANGE LOG
+
+### 0.1.5
+
+- Added session tracking and latest-session access from the bottom bar.
+- Added cache usage statistics with latest and aggregated percentages.
+- Preserved the last valid cache percentage while a response is streaming.
+- Improved file manager modes, overlays, and scrolling behavior.
+
 ## License
 
 MIT

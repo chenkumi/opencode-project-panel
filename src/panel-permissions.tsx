@@ -3,7 +3,8 @@ import type { SelectOption, TextRenderable } from "@opentui/core"
 import { RGBA, SyntaxStyle } from "@opentui/core"
 import { useBindings } from "@opentui/keymap/solid"
 import { useTerminalDimensions } from "@opentui/solid"
-import { setMCPEnabled, setPermission, setToolPermission } from "./config-helper.js"
+import { setMCPEnabled, setPermission, setToolPermission, type ConfigMutationResult } from "./config-helper.js"
+import type { FileRevision } from "./file-io.js"
 
 interface SkillItem {
     name: string
@@ -32,6 +33,7 @@ interface Props {
     initialSkillDeny: string[]
     tools: ToolItem[]
     mcps: MCPItem[]
+    configRevision?: FileRevision
 }
 
 const HINT_FG = RGBA.fromInts(180, 180, 180, 255)
@@ -40,6 +42,7 @@ const FG = RGBA.fromInts(255, 255, 255, 255)
 export default function PermissionsPanel(props: Props) {
     const dimensions = useTerminalDimensions()
     const theme = () => props.api.theme.current
+    let configRevision = props.configRevision
 
     let activeTab = 0
     let tabSkillsEl: TextRenderable
@@ -62,6 +65,20 @@ export default function PermissionsPanel(props: Props) {
     const skAllowSet = new Set(props.initialSkillAllow)
     const skDenySet = new Set(props.initialSkillDeny)
     const skCatchAllDeny = skDenySet.has("*")
+
+    function mutationSucceeded(result: ConfigMutationResult): boolean {
+        if (result.status === "ok") {
+            configRevision = result.revision
+            return true
+        }
+        const message = result.status === "conflict"
+            ? "The configuration changed externally. Reload Permissions before editing."
+            : result.status === "invalid"
+                ? "The OpenCode configuration is invalid."
+                : "The configuration could not be saved."
+        props.api.ui.toast({ variant: "error", title: "Permissions", message })
+        return false
+    }
 
     function skIsAllow(s: SkillItem): boolean {
         if (skAllowSet.has("*")) return true
@@ -89,7 +106,8 @@ export default function PermissionsPanel(props: Props) {
         const s = props.skills.find((x) => x.name === name)
         if (!s) return
         const was = skIsAllow(s)
-        setPermission(props.configFile, name, was ? "deny" : "allow")
+        const result = setPermission(props.configFile, name, was ? "deny" : "allow", configRevision)
+        if (!mutationSucceeded(result)) return
         skAllowSet.delete(name)
         skDenySet.delete(name)
         if (was) skDenySet.add(name)
@@ -123,7 +141,8 @@ export default function PermissionsPanel(props: Props) {
         const order = ["allow", "ask", "deny"] as const
         const idx = order.indexOf(t.action as typeof order[number])
         const next = order[(idx + 1) % order.length]!
-        setToolPermission(props.configFile, name, next)
+        const result = setToolPermission(props.configFile, name, next, configRevision)
+        if (!mutationSucceeded(result)) return
         t.action = next
         selectRef.options = currentOptions()
         tlUpdateDetail(t)
@@ -156,7 +175,8 @@ export default function PermissionsPanel(props: Props) {
         const m = props.mcps.find((x) => x.name === name)
         if (!m) return
         const next = !m.enabled
-        setMCPEnabled(props.configFile, name, next)
+        const result = setMCPEnabled(props.configFile, name, next, configRevision)
+        if (!mutationSucceeded(result)) return
         m.enabled = next
         selectRef.options = currentOptions()
         mcpUpdateDetail(m)
@@ -300,7 +320,7 @@ export default function PermissionsPanel(props: Props) {
                     </box>
                     <box ref={(el) => { toolsDetailBox = el }} visible={false} padding={1} flexDirection="column" gap={1}>
                         <text ref={(el) => { tlNameEl = el }} fg={theme().text}>{firstTool?.name ?? ""}</text>
-                        <text ref={(el) => { tlActionEl = el }} fg={theme().textMuted}>{firstTool ? (firstTool.action === "allow" ? "allowed" : "denied") : ""}</text>
+                        <text ref={(el) => { tlActionEl = el }} fg={theme().textMuted}>{firstTool ? (firstTool.action === "allow" ? "allowed" : firstTool.action === "ask" ? "ask" : "denied") : ""}</text>
                     </box>
                     <box ref={(el) => { mcpsDetailBox = el }} visible={false} padding={1} flexDirection="column" gap={1}>
                         <text ref={(el) => { mcpNameEl = el }} fg={theme().text}>{firstMcp?.name ?? ""}</text>

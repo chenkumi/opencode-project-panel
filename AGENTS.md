@@ -12,6 +12,17 @@ Type check: `bun run typecheck`
 
 **Any modification must pass `bun run build` before reporting completion.**
 
+## TUI Manual Verification
+
+Use an `opencode-pty` session to inspect timing-sensitive UI behavior on a real TUI screen. Build the plugin before starting OpenCode, then start `opencode` with the PTY working directory set to `./test`:
+
+```sh
+npm run build
+# opencode-pty: cwd=./test, command=opencode
+```
+
+Inspect the rendered screen and capture PTY output for the states required by the specific test item. Terminate the PTY session after the test.
+
 ## Architecture
 
 - `src/index.tsx` — Plugin entry; registers `app_bottom` slot.

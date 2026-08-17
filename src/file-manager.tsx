@@ -3,9 +3,16 @@ import type { SelectOption, TextRenderable } from "@opentui/core"
 import { parseColor, RGBA, SyntaxStyle } from "@opentui/core"
 import { useBindings } from "@opentui/keymap/solid"
 import { useTerminalDimensions } from "@opentui/solid"
-import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, opendirSync, renameSync, rmSync, statSync } from "node:fs"
+import type { Dirent } from "node:fs"
 import path from "node:path"
 import { onCleanup, onMount } from "solid-js"
+import {
+    MAX_DIRECTORY_ENTRIES,
+    MAX_PREVIEW_BYTES,
+    readTextFile,
+    writeTextFileAtomic,
+} from "./file-io.js"
 import FileViewer from "./file-viewer.js"
 
 interface FileEntry {
@@ -88,15 +95,8 @@ const KNOWN_TEXT_FILENAMES = new Set([
 ])
 
 function hasNullByte(filePath: string): boolean {
-    try {
-        const fd = openSync(filePath, "r")
-        const buf = Buffer.alloc(4096)
-        const bytesRead = readSync(fd, buf, 0, 4096, 0)
-        closeSync(fd)
-        return bytesRead > 0 && buf.subarray(0, bytesRead).includes(0)
-    } catch {
-        return true
-    }
+    const result = readTextFile(filePath, 4096, "preview")
+    return result.status === "binary" || result.status === "error"
 }
 
 function isTextFile(name: string, fullPath: string): boolean {
@@ -185,9 +185,24 @@ const EXT_TO_FILETYPE: Record<string, string> = {
     ".nix": "nix",
 }
 
-function readDir(dir: string): FileEntry[] {
+type DirectoryListing = {
+    entries: FileEntry[]
+    truncated: boolean
+}
+
+function readDir(dir: string): DirectoryListing {
+    let handle: ReturnType<typeof opendirSync> | undefined
     try {
-        const items = readdirSync(dir, { withFileTypes: true })
+        const isRoot = path.resolve(dir, "..") === dir
+        const itemLimit = isRoot ? MAX_DIRECTORY_ENTRIES : MAX_DIRECTORY_ENTRIES - 1
+        const items: Dirent[] = []
+        handle = opendirSync(dir)
+        while (items.length < itemLimit) {
+            const item = handle.readSync()
+            if (!item) break
+            items.push(item)
+        }
+        const truncated = items.length === itemLimit && handle.readSync() !== null
         const dirs = items
             .filter((e) => e.isDirectory())
             .map((e) => ({ name: e.name, fullPath: path.join(dir, e.name), isDir: true }))
@@ -196,13 +211,14 @@ function readDir(dir: string): FileEntry[] {
             .filter((e) => e.isFile())
             .map((e) => ({ name: e.name, fullPath: path.join(dir, e.name), isDir: false }))
             .sort((a, b) => a.name.localeCompare(b.name))
-        const isRoot = path.resolve(dir, "..") === dir
         const parent: FileEntry | undefined = isRoot
             ? undefined
             : { name: "..", fullPath: path.resolve(dir, ".."), isDir: true }
-        return parent ? [parent, ...dirs, ...files] : [...dirs, ...files]
+        return { entries: parent ? [parent, ...dirs, ...files] : [...dirs, ...files], truncated }
     } catch {
-        return []
+        return { entries: [], truncated: false }
+    } finally {
+        try { handle?.closeSync() } catch { /* best effort cleanup */ }
     }
 }
 
@@ -269,7 +285,8 @@ export default function NewFileManager(props: Props) {
     const theme = () => props.api.theme.current
 
     let currentDir = props.initialDir || props.api.state.path.directory || props.api.state.path.worktree || process.cwd()
-    let entries = readDir(currentDir)
+    let directory = readDir(currentDir)
+    let entries = directory.entries
 
     let overlayMode: "" | "confirm" | "prompt" | "mode" = ""
     let overlayConfirmAction: (() => void) | null = null
@@ -309,7 +326,8 @@ export default function NewFileManager(props: Props) {
 
     function navigateTo(dir: string) {
         currentDir = dir
-        entries = readDir(currentDir)
+        directory = readDir(currentDir)
+        entries = directory.entries
         if (filterInputEl) filterInputEl.setText("")
         filterText = ""
         filteredEntries = entries
@@ -324,7 +342,8 @@ export default function NewFileManager(props: Props) {
 
     function handleReload() {
         const selectedPath = selectRef?.options?.[selectRef.getSelectedIndex()]?.value ?? currentEntry?.fullPath
-        entries = readDir(currentDir)
+        directory = readDir(currentDir)
+        entries = directory.entries
         filteredEntries = filterText
             ? entries.filter((e) => e.name.toLowerCase().includes(filterText.toLowerCase()))
             : entries
@@ -362,13 +381,14 @@ export default function NewFileManager(props: Props) {
 
         if (entry.isDir) {
             rightDescEl.content = "directory"
-            const items = readDir(entry.fullPath)
+            const listing = readDir(entry.fullPath)
+            const items = listing.entries
             if (items.length === 0) {
                 rightDirListEl.content = "(empty directory)"
             } else {
                 rightDirListEl.content = items
                     .map((e) => (e.isDir ? "📁 " : "📄 ") + e.name + (e.isDir ? "/" : ""))
-                    .join("\n")
+                    .join("\n") + (listing.truncated ? "\n… more entries omitted" : "")
             }
             rightDirListEl.visible = true
             return
@@ -382,14 +402,23 @@ export default function NewFileManager(props: Props) {
             return
         }
 
-        let content: string
-        try {
-            content = readFileSync(entry.fullPath, "utf-8")
-        } catch {
+        const result = readTextFile(entry.fullPath, MAX_PREVIEW_BYTES, "preview")
+        if (result.status === "error") {
             rightPreviewEl.content = "(preview unavailable)"
             rightPreviewEl.visible = true
             return
         }
+        if (result.status === "binary") {
+            rightPreviewEl.content = "(binary file)"
+            rightPreviewEl.visible = true
+            return
+        }
+        if (result.status === "too-large") {
+            rightPreviewEl.content = "(preview unavailable: file too large)"
+            rightPreviewEl.visible = true
+            return
+        }
+        const content = result.content
 
         const ext = path.extname(entry.name).toLowerCase()
         if (ext === ".md" || ext === ".mdx" || ext === ".markdown") {
@@ -479,6 +508,14 @@ export default function NewFileManager(props: Props) {
         }
     }
 
+    function showFileError(message: string) {
+        props.api.ui.toast({ variant: "error", title: "File Manager", message })
+    }
+
+    function isSafeEntryName(name: string): boolean {
+        return Boolean(name) && name !== "." && name !== ".." && path.basename(name) === name && !name.includes("\\")
+    }
+
     function handleDelete() {
         const entry = currentEntry
         if (!entry || entry.name === ".." || entry.name === ".") return
@@ -486,7 +523,9 @@ export default function NewFileManager(props: Props) {
         showConfirm(`Delete "${label}"?`, () => {
             try {
                 rmSync(entry.fullPath, { recursive: entry.isDir, force: true })
-            } catch { /* ignore */ }
+            } catch {
+                showFileError(`Unable to delete "${label}".`)
+            }
             hideOverlay()
         })
     }
@@ -498,10 +537,21 @@ export default function NewFileManager(props: Props) {
         isOverlayActive = true
         overlayPromptAction = (newName: string) => {
             if (!newName || newName === entry.name) { hideOverlay(); return }
+            if (!isSafeEntryName(newName)) {
+                showFileError("Name must stay within the current directory.")
+                return
+            }
             const newPath = path.join(path.dirname(entry.fullPath), newName)
             try {
+                statSync(newPath)
+                showFileError(`"${newName}" already exists.`)
+                return
+            } catch { /* destination does not exist */ }
+            try {
                 renameSync(entry.fullPath, newPath)
-            } catch { /* ignore */ }
+            } catch {
+                showFileError(`Unable to rename "${entry.name}".`)
+            }
             hideOverlay()
         }
         promptInputValue = entry.name
@@ -541,6 +591,7 @@ export default function NewFileManager(props: Props) {
                     props.api.ui.dialog.setSize("xlarge")
                 }
             } catch {
+                showFileError("Path does not exist or cannot be opened.")
                 hideOverlay()
             }
         }
@@ -563,11 +614,19 @@ export default function NewFileManager(props: Props) {
             if (!name) { hideOverlay(); return }
             const isDir = name.endsWith("/")
             const cleanName = isDir ? name.slice(0, -1) : name
+            if (!isSafeEntryName(cleanName)) {
+                showFileError("Name must stay within the current directory.")
+                return
+            }
             const newPath = path.join(currentDir, cleanName)
             try {
                 if (isDir) mkdirSync(newPath, { recursive: true })
                 else {
-                    writeFileSync(newPath, "", "utf-8")
+                    const result = writeTextFileAtomic(newPath, "")
+                    if (result.status !== "ok") {
+                        showFileError(`Unable to create "${cleanName}".`)
+                        return
+                    }
                     props.api.ui.dialog.replace(() => (
                         <FileViewer api={props.api} filePath={newPath} initialMode="edit" onBack={() => {
                             props.api.ui.dialog.replace(() => <NewFileManager api={props.api} initialDir={currentDir} />)
@@ -577,7 +636,9 @@ export default function NewFileManager(props: Props) {
                     props.api.ui.dialog.setSize("xlarge")
                     return
                 }
-            } catch { /* ignore */ }
+            } catch {
+                showFileError(`Unable to create "${cleanName}".`)
+            }
             hideOverlay()
         }
         promptInputValue = ""
@@ -640,7 +701,9 @@ export default function NewFileManager(props: Props) {
             chmodSync(path, s.mode ^ bit)
             updateModeDisplay()
             modeSelectRef.options = getModeOptions()
-        } catch { /* ignore */ }
+        } catch {
+            showFileError("Unable to change file mode.")
+        }
     }
 
     const projectRoot = () => props.api.state.path.directory || props.api.state.path.worktree
@@ -683,6 +746,21 @@ export default function NewFileManager(props: Props) {
         bindings: [
             { key: "tab", cmd: () => cycleFocus(1) },
             { key: "shift+tab", cmd: () => cycleFocus(-1) },
+        ],
+    }))
+
+    useBindings(() => ({
+        priority: 3,
+        enabled: () => isOverlayActive,
+        bindings: [
+            {
+                key: "return",
+                cmd: () => {
+                    if (overlayMode === "confirm") overlayConfirmAction?.()
+                    else if (overlayMode === "prompt") overlayPromptAction?.(promptInputValue)
+                    return true
+                },
+            },
         ],
     }))
 
