@@ -88,6 +88,10 @@ so OpenCode's Bun-based plugin loader can resolve them.
 
 ## CHANGE LOG
 
+### 0.1.6
+
+- Fixed bottom-bar flex layout when session titles are long.
+
 ### 0.1.5
 
 - Added session tracking and latest-session access from the bottom bar.

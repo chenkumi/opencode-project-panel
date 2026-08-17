@@ -395,30 +395,30 @@ export default function BottomBar(props: Props) {
                 gap={3}
                 backgroundColor={BG}
             >
-                <box flexDirection="row" gap={0} onMouseUp={() => showPanel(api, () => <NewFileManager api={api} />)}>
+                <box flexShrink={0} flexDirection="row" gap={0} onMouseUp={() => showPanel(api, () => <NewFileManager api={api} />)}>
                     <text fg={HINT_FG}>[F1]</text>
                     <text fg={FG}> Files</text>
                 </box>
-                <box flexDirection="row" gap={0} onMouseUp={openPermissions}>
+                <box flexShrink={0} flexDirection="row" gap={0} onMouseUp={openPermissions}>
                     <text fg={HINT_FG}>[F3]</text>
                     <text fg={FG}> Permissions</text>
                 </box>
-                <box flexGrow={1} flexDirection="row" gap={0}
+                <box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" gap={0}
                     onMouseUp={openLatestSession}>
                     {(() => {
                         const s = latestSession()
                         if (!s) return <text />
                         return (
                             <>
-                                <text fg={HINT_FG} marginRight={1}>[F6]</text>
-                                <text fg={FG} marginRight={1}>Last Session:</text>
-                                <text fg={FG} truncate wrapMode="none">{s.title}</text>
+                                <text fg={HINT_FG} flexShrink={0} marginRight={1}>[F6]</text>
+                                <text fg={FG} flexShrink={0} marginRight={1}>Last Session:</text>
+                                <text fg={FG} flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} truncate wrapMode="none">{s.title}</text>
                             </>
                         )
                     })()}
                 </box>
                 {(cacheStats().average !== undefined || cacheStats().latest !== undefined) && (
-                    <text fg={HINT_FG} marginLeft={1}>
+                    <text fg={HINT_FG} marginLeft={1} flexShrink={0}>
                         Cached {cacheStats().latest ?? "--"}%/{cacheStats().average ?? "--"}%
                     </text>
                 )}
