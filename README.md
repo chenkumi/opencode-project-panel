@@ -88,6 +88,10 @@ so OpenCode's Bun-based plugin loader can resolve them.
 
 ## CHANGE LOG
 
+### 0.1.8
+
+- Prevented the bottom-bar Escape binding from intercepting OpenCode interrupt handling when no panel is open.
+
 ### 0.1.7
 
 - Limited cache statistics to primary sessions and stopped cache history requests for subagents.

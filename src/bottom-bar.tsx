@@ -381,15 +381,21 @@ export default function BottomBar(props: Props) {
             { key: "delete", cmd: () => currentFileActions?.delete?.() },
             { key: "ctrl+g", cmd: () => currentFileActions?.goto?.() },
             { key: "ctrl+f", cmd: () => currentFileActions?.focusFilter?.() },
-            {
-                key: "escape", cmd: () => {
-                    if (isOverlayActive) currentFileActions?.hideOverlay?.()
-                    else if (focusedPane === "filter" || focusedPane === "preview") currentFileActions?.focusSelect?.()
-                    else api.ui.dialog.clear()
-                    return true
-                }
-            },
         ],
+    }))
+
+    useBindings(() => ({
+        priority: 1,
+        enabled: () => currentFileActions !== null,
+        bindings: [{
+            key: "escape",
+            cmd: () => {
+                if (isOverlayActive) currentFileActions?.hideOverlay?.()
+                else if (focusedPane === "filter" || focusedPane === "preview") currentFileActions?.focusSelect?.()
+                else api.ui.dialog.clear()
+                return true
+            },
+        }],
     }))
 
     return (
