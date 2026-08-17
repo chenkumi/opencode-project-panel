@@ -18,6 +18,11 @@ type CacheStats = {
     average?: number
 }
 
+type ActiveSession = {
+    id: string
+    primary: boolean
+}
+
 function showPanel(api: TuiPluginApi, panel: () => JSX.Element) {
     api.ui.dialog.replace(panel)
     api.ui.dialog.setSize("xlarge")
@@ -87,13 +92,16 @@ export default function BottomBar(props: Props) {
     let permissionsGeneration = 0
     const [latestSession, setLatestSession] = createSignal<{ id: string; title: string } | undefined>()
     const [currentSessionID, setCurrentSessionID] = createSignal<string | undefined>()
+    const [activeSession, setActiveSessionState] = createSignal<ActiveSession | undefined>()
     const [cacheStats, setCacheStats] = createSignal<CacheStats>({})
     let cacheRequestVersion = 0
     const latestSessionRequests = createRequestCoordinator({ parentSignal: api.lifecycle.signal })
+    const sessionRequests = createRequestCoordinator({ parentSignal: api.lifecycle.signal })
     const cacheRequests = createRequestCoordinator({ parentSignal: api.lifecycle.signal })
 
     function getCacheSessionID() {
-        return currentSessionID()
+        const session = activeSession()
+        return session?.primary ? session.id : undefined
     }
 
     function openPermissions() {
@@ -140,6 +148,22 @@ export default function BottomBar(props: Props) {
     function calculateCachePercent(tokens: any) {
         const usage = getCacheUsage(tokens)
         return usage ? Math.round((usage.cached / usage.total) * 100) : undefined
+    }
+
+    function resolveActiveSession(sessionID: string) {
+        void sessionRequests.run(async (signal) => {
+            try {
+                const res = await api.client.session.get({ sessionID }, { throwOnError: true, signal }) as any
+                const session = res.data?.data ?? res.data
+                if (signal.aborted || currentSessionID() !== sessionID) return
+                if (!session) return
+                const primary = !session.parentID
+                setActiveSessionState({ id: sessionID, primary })
+                if (primary) fetchCacheStats(sessionID)
+            } catch {
+                // Keep cache stats hidden when the session scope cannot be resolved.
+            }
+        })
     }
 
     function fetchCacheStats(sessionID: string) {
@@ -215,11 +239,12 @@ export default function BottomBar(props: Props) {
     }
 
     function setActiveSession(sessionID: string | undefined) {
-        if (currentSessionID() === sessionID) return
+        if (currentSessionID() === sessionID && (sessionID === undefined || activeSession()?.id === sessionID)) return
         setCurrentSessionID(sessionID)
+        setActiveSessionState(undefined)
         cacheRequestVersion++
         setCacheStats({})
-        if (sessionID) fetchCacheStats(sessionID)
+        if (sessionID) resolveActiveSession(sessionID)
     }
 
     function fetchLatestSession() {
@@ -254,21 +279,13 @@ export default function BottomBar(props: Props) {
         }
     }
 
-    let routeInitialized = false
     createEffect(() => {
         const route = api.route.current
         const sessionID = route.name === "session" ? (route.params?.sessionID as string | undefined) : undefined
-        if (!routeInitialized) {
-            routeInitialized = true
-            setCurrentSessionID(sessionID)
-            return
-        }
         setActiveSession(sessionID)
     })
 
     onMount(() => {
-        const initialSessionID = currentSessionID()
-        if (initialSessionID) fetchCacheStats(initialSessionID)
         fetchLatestSession()
         const unsubs: Array<() => void> = []
         for (const evt of ["session.created", "session.updated", "session.deleted"] as const) {
@@ -312,6 +329,7 @@ export default function BottomBar(props: Props) {
             permissionsGeneration++
             permissionsAbort?.abort()
             latestSessionRequests.dispose()
+            sessionRequests.dispose()
             cacheRequests.dispose()
             unsubs.forEach((fn) => fn())
         })

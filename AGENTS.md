@@ -23,6 +23,17 @@ npm run build
 
 Inspect the rendered screen and capture PTY output for the states required by the specific test item. Terminate the PTY session after the test.
 
+## Local Plugin Testing
+
+<!-- user-specified -->
+
+Before testing the local plugin, temporarily remove or disable the existing npm-installed `opencode-project-panel` entry from `~/.config/opencode/tui.json`; do not load both plugins at the same time.
+
+1. Back up the original npm plugin configuration.
+2. Run `bun run build`, then configure the test TUI to load the generated local plugin from `../../dist/index.js`.
+3. Run the local TUI test from `./test`.
+4. Restore the original npm plugin configuration after testing, even when the test fails.
+
 ## Architecture
 
 - `src/index.tsx` — Plugin entry; registers `app_bottom` slot.

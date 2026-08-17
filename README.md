@@ -88,6 +88,10 @@ so OpenCode's Bun-based plugin loader can resolve them.
 
 ## CHANGE LOG
 
+### 0.1.7
+
+- Limited cache statistics to primary sessions and stopped cache history requests for subagents.
+
 ### 0.1.6
 
 - Fixed bottom-bar flex layout when session titles are long.
