@@ -251,7 +251,7 @@ export default function BottomBar(props: Props) {
         void latestSessionRequests.run(async (signal) => {
             try {
                 const previousCacheSessionID = getCacheSessionID()
-                const res = await api.client.session.list({ limit: 1 }, { throwOnError: true, signal }) as any
+                const res = await api.client.session.list({ roots: true, limit: 1 }, { throwOnError: true, signal }) as any
                 const data: Array<{ id: string; title: string }> | undefined = res.data
                 const session = data?.[0]
                 if (session) {

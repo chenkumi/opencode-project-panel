@@ -88,6 +88,10 @@ so OpenCode's Bun-based plugin loader can resolve them.
 
 ## CHANGE LOG
 
+### 0.1.9
+
+- Restricted F6 latest-session navigation to primary sessions.
+
 ### 0.1.8
 
 - Prevented the bottom-bar Escape binding from intercepting OpenCode interrupt handling when no panel is open.
