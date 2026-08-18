@@ -18,6 +18,8 @@
   "files": [
     "dist",
     "README.md",
+    "README.zh-TW.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [
